@@ -1,0 +1,54 @@
+@page "/medications"
+@inject AppState State
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Medications — MedTracker</PageTitle>
+
+<div class="page-header">
+    <h1>Medications</h1>
+    <button class="btn btn-primary" @onclick="@(() => Nav.NavigateTo("medications/new"))">
+        Add medication
+    </button>
+</div>
+
+@if (State.Medications.Count == 0)
+{
+    <p class="placeholder">No medications yet.</p>
+}
+else
+{
+    <ul class="med-list">
+        @foreach (var m in State.Medications.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            <li class="med-row" @onclick="@(() => Nav.NavigateTo($"medications/edit/{m.Id}"))">
+                <div class="med-main">
+                    <span class="med-name">@m.Name</span>
+                    @{
+                        var dose = m.DoseSummary();
+                    }
+                    @if (!string.IsNullOrEmpty(dose))
+                    {
+                        <span class="med-dose">@dose</span>
+                    }
+                    @if (m.Form is not null)
+                    {
+                        <span class="med-form">@m.Form</span>
+                    }
+                </div>
+                <div class="med-schedule">@m.ScheduleSummary()</div>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        await State.EnsureLoadedAsync();
+        State.Changed += OnChanged;
+    }
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+}

@@ -1,0 +1,44 @@
+@namespace MedTracker.Components
+@inject AlarmService Alarms
+@implements IDisposable
+
+@if (Alarms.Current is not null && Alarms.CurrentMedication is not null)
+{
+    var med = Alarms.CurrentMedication;
+    var dose = med.DoseSummary();
+    <div class="alarm-backdrop">
+        <div class="alarm-modal" role="dialog" aria-modal="true">
+            <h2 class="alarm-title">@med.Name</h2>
+            <div class="alarm-meta">
+                @if (!string.IsNullOrEmpty(dose))
+                {
+                    <div><strong>Dose:</strong> @dose</div>
+                }
+                @if (med.Form is not null)
+                {
+                    <div><strong>Form:</strong> @med.Form</div>
+                }
+                @if (Alarms.Current.ScheduledTime is not null)
+                {
+                    <div><strong>Scheduled:</strong> @Alarms.Current.ScheduledTime</div>
+                }
+                @if (!string.IsNullOrWhiteSpace(med.Notes))
+                {
+                    <div class="alarm-notes">@med.Notes</div>
+                }
+            </div>
+            <div class="alarm-actions">
+                <button class="btn-ignore" @onclick="Ignore">Ignore</button>
+                <button class="btn-take" @onclick="Take">Take</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized() => Alarms.Changed += OnChanged;
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    private Task Take() => Alarms.ResolveAsync(DoseStatus.Taken);
+    private Task Ignore() => Alarms.ResolveAsync(DoseStatus.Ignored);
+    public void Dispose() => Alarms.Changed -= OnChanged;
+}

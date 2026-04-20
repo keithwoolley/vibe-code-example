@@ -1,0 +1,109 @@
+@page "/history"
+@inject AppState State
+@implements IDisposable
+
+<PageTitle>History — MedTracker</PageTitle>
+
+<h1>History</h1>
+
+@if (Days.Count == 0)
+{
+    <p class="placeholder">No history yet.</p>
+}
+else
+{
+    <div class="history-layout">
+        <aside class="date-list">
+            @foreach (var d in Days)
+            {
+                <button class="date-btn @(d == _selected ? "selected" : "")"
+                        @onclick="@(() => _selected = d)">
+                    @FormatDate(d)
+                    <span class="day-summary">@Summary(d)</span>
+                </button>
+            }
+        </aside>
+
+        <section class="day-detail">
+            @if (_selected is not null)
+            {
+                <h2>@FormatDate(_selected)</h2>
+                var events = State.DoseEvents
+                    .Where(e => e.Date == _selected)
+                    .OrderBy(e => e.ScheduledTime ?? "99:99", StringComparer.Ordinal)
+                    .ToList();
+                if (events.Count == 0)
+                {
+                    <p class="placeholder">No doses recorded.</p>
+                }
+                else
+                {
+                    <ul class="event-list readonly">
+                        @foreach (var ev in events)
+                        {
+                            <li class="event-row status-@ev.Status.ToString().ToLower()">
+                                <span class="time">@(ev.ScheduledTime ?? "PRN")</span>
+                                <span class="name">@MedName(ev.MedicationId)</span>
+                                <span class="status">@StatusLabel(ev.Status)</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            }
+        </section>
+    </div>
+}
+
+@code {
+    private string? _selected;
+
+    private List<string> Days =>
+        State.DoseEvents
+            .Select(e => e.Date)
+            .Distinct()
+            .OrderByDescending(d => d, StringComparer.Ordinal)
+            .ToList();
+
+    private string TodayStr => DateTime.Now.ToString("yyyy-MM-dd");
+
+    private string FormatDate(string? d)
+    {
+        if (d is null) return "";
+        if (DateOnly.TryParse(d, out var parsed))
+        {
+            var suffix = d == TodayStr ? " (today)" : "";
+            return parsed.ToString("ddd, MMM d, yyyy") + suffix;
+        }
+        return d;
+    }
+
+    private string Summary(string d)
+    {
+        var evs = State.DoseEvents.Where(e => e.Date == d).ToList();
+        var taken = evs.Count(e => e.Status == DoseStatus.Taken);
+        var missed = evs.Count(e => e.Status == DoseStatus.Ignored);
+        return $"{taken} taken · {missed} missed";
+    }
+
+    private string MedName(string id) =>
+        State.Medications.FirstOrDefault(m => m.Id == id)?.Name ?? "(deleted)";
+
+    private static string StatusLabel(DoseStatus s) => s switch
+    {
+        DoseStatus.Pending => "Pending",
+        DoseStatus.Due => "Due",
+        DoseStatus.Taken => "Taken",
+        DoseStatus.Ignored => "Missed",
+        _ => s.ToString()
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await State.EnsureLoadedAsync();
+        _selected = Days.FirstOrDefault();
+        State.Changed += OnChanged;
+    }
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+}

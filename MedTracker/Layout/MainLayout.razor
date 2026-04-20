@@ -1,0 +1,36 @@
+@inherits LayoutComponentBase
+@inject SchedulerService Scheduler
+@inject AlarmService Alarms
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<AlarmModal />
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Alarms.Changed += OnAlarmChanged;
+            // Prime audio so later auto-plays aren't blocked (best-effort).
+            try { await JS.InvokeVoidAsync("medtracker.primeAudio"); } catch { }
+            await Scheduler.StartAsync();
+        }
+    }
+
+    private void OnAlarmChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Alarms.Changed -= OnAlarmChanged;
+}

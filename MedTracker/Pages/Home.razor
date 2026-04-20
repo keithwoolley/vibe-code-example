@@ -1,0 +1,153 @@
+@page "/"
+@inject AppState State
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Today — MedTracker</PageTitle>
+
+<h1>Today</h1>
+<p class="today-date">@DateTime.Now.ToString("dddd, MMMM d, yyyy")</p>
+
+@if (State.Medications.Count == 0)
+{
+    <div class="empty-state">
+        <p>No medications yet.</p>
+        <button class="btn btn-primary" @onclick="@(() => Nav.NavigateTo("medications/new"))">
+            Add your first medication
+        </button>
+    </div>
+}
+else
+{
+    <section class="timeline">
+        <h2>Timeline</h2>
+        @if (TodayEvents.Count == 0)
+        {
+            <p class="placeholder">No scheduled doses today.</p>
+        }
+        else
+        {
+            <ul class="event-list">
+                @foreach (var ev in TodayEvents)
+                {
+                    var med = MedName(ev.MedicationId);
+                    var dose = MedDose(ev.MedicationId);
+                    var clickable = ev.Status is DoseStatus.Taken or DoseStatus.Ignored;
+                    <li class="event-row status-@ev.Status.ToString().ToLower() @(clickable ? "clickable" : "")"
+                        @onclick="@(() => Flip(ev))">
+                        <span class="time">@(ev.ScheduledTime ?? "PRN")</span>
+                        <span class="name">@med @(string.IsNullOrEmpty(dose) ? "" : $"· {dose}")</span>
+                        <span class="status">@StatusLabel(ev.Status)</span>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="missed-today">
+        <h2>Missed today</h2>
+        @{
+            var missed = TodayEvents.Where(e => e.Status == DoseStatus.Ignored).ToList();
+        }
+        @if (missed.Count == 0)
+        {
+            <p class="placeholder">No missed doses yet.</p>
+        }
+        else
+        {
+            <ul class="missed-list">
+                @foreach (var ev in missed)
+                {
+                    <li>
+                        <span class="time">@(ev.ScheduledTime ?? "PRN")</span>
+                        <span class="name">@MedName(ev.MedicationId)</span>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="prn">
+        <h2>PRN</h2>
+        @{
+            var prnMeds = State.Medications.Where(m => m.IsPRN).ToList();
+        }
+        @if (prnMeds.Count == 0)
+        {
+            <p class="placeholder">No as-needed medications.</p>
+        }
+        else
+        {
+            <div class="prn-buttons">
+                @foreach (var m in prnMeds)
+                {
+                    <button class="btn-prn" @onclick="@(() => LogPrn(m))">
+                        Took @m.Name now
+                    </button>
+                }
+            </div>
+        }
+    </section>
+}
+
+@code {
+    private string TodayStr => DateTime.Now.ToString("yyyy-MM-dd");
+
+    private List<DoseEvent> TodayEvents =>
+        State.DoseEvents
+            .Where(e => e.Date == TodayStr)
+            .OrderBy(e => e.ScheduledTime ?? "99:99", StringComparer.Ordinal)
+            .ThenBy(e => e.Id)
+            .ToList();
+
+    private string MedName(string id) =>
+        State.Medications.FirstOrDefault(m => m.Id == id)?.Name ?? "(deleted)";
+
+    private string MedDose(string id) =>
+        State.Medications.FirstOrDefault(m => m.Id == id)?.DoseSummary() ?? "";
+
+    private static string StatusLabel(DoseStatus s) => s switch
+    {
+        DoseStatus.Pending => "Pending",
+        DoseStatus.Due => "Due now",
+        DoseStatus.Taken => "Taken",
+        DoseStatus.Ignored => "Missed",
+        _ => s.ToString()
+    };
+
+    private async Task Flip(DoseEvent ev)
+    {
+        if (ev.Status is DoseStatus.Taken)
+            ev.Status = DoseStatus.Ignored;
+        else if (ev.Status is DoseStatus.Ignored)
+            ev.Status = DoseStatus.Taken;
+        else
+            return;
+        await State.SaveAsync();
+        State.NotifyChanged();
+    }
+
+    private async Task LogPrn(Medication m)
+    {
+        State.DoseEvents.Add(new DoseEvent
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            MedicationId = m.Id,
+            Date = TodayStr,
+            ScheduledTime = null,
+            Status = DoseStatus.Taken
+        });
+        await State.SaveAsync();
+        State.NotifyChanged();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await State.EnsureLoadedAsync();
+        State.Changed += OnChanged;
+    }
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.Changed -= OnChanged;
+}

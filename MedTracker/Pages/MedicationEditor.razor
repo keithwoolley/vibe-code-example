@@ -1,0 +1,202 @@
+@page "/medications/new"
+@page "/medications/edit/{Id}"
+@inject AppState State
+@inject NavigationManager Nav
+
+<PageTitle>@(IsNew ? "Add medication" : "Edit medication") — MedTracker</PageTitle>
+
+<h1>@(IsNew ? "Add medication" : "Edit medication")</h1>
+
+@if (!IsNew && _med is null)
+{
+    <p>Medication not found. <a href="medications">Back to list</a></p>
+}
+else if (_med is not null)
+{
+    <div class="editor">
+        <label>
+            Name *
+            <input type="text" @bind="_med.Name" @bind:event="oninput" />
+        </label>
+
+        <label>
+            Dose amount
+            <input type="text" @bind="_med.DoseAmount" placeholder="e.g., 10 or 1/2" />
+        </label>
+
+        <label>
+            Dose unit
+            <input type="text" @bind="_med.DoseUnit" placeholder="e.g., mg, tablet" />
+        </label>
+
+        <label>
+            Form
+            <select @bind="_formValue">
+                <option value=""></option>
+                @foreach (var f in Enum.GetValues<Form>())
+                {
+                    <option value="@f">@f</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            Notes
+            <textarea rows="3" @bind="_med.Notes"></textarea>
+        </label>
+
+        <label class="checkbox-row">
+            <input type="checkbox" @bind="_med.IsPRN" @bind:after="OnPrnToggled" />
+            As-needed (PRN) — no alarms
+        </label>
+
+        @if (!_med.IsPRN)
+        {
+            <fieldset class="alarm-times">
+                <legend>Alarm times</legend>
+                @for (int i = 0; i < _med.AlarmTimes.Count; i++)
+                {
+                    var idx = i;
+                    <div class="time-row">
+                        <input type="time" value="@_med.AlarmTimes[idx]"
+                               @onchange="@(e => _med.AlarmTimes[idx] = NormalizeTime(e.Value?.ToString()))" />
+                        <button type="button" @onclick="@(() => RemoveTime(idx))">Remove</button>
+                    </div>
+                }
+                <button type="button" @onclick="AddTime">Add alarm time</button>
+            </fieldset>
+        }
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <p class="error">@_error</p>
+        }
+
+        <div class="editor-actions">
+            <button class="btn btn-primary" @onclick="Save">Save</button>
+            <button class="btn" @onclick="Cancel">Cancel</button>
+            @if (!IsNew)
+            {
+                <button class="btn btn-danger" @onclick="ConfirmDelete">Delete</button>
+            }
+        </div>
+
+        @if (_showDeleteConfirm)
+        {
+            <div class="confirm-dialog">
+                <p>Delete <strong>@_med.Name</strong>? This will also delete this medication's history.</p>
+                <button class="btn btn-danger" @onclick="Delete">Delete permanently</button>
+                <button class="btn" @onclick="@(() => _showDeleteConfirm = false)">Cancel</button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? Id { get; set; }
+    private bool IsNew => string.IsNullOrEmpty(Id);
+    private Medication? _med;
+    private string _formValue = "";
+    private string? _error;
+    private bool _showDeleteConfirm;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await State.EnsureLoadedAsync();
+        if (IsNew)
+        {
+            _med = new Medication { Id = Guid.NewGuid().ToString("N") };
+        }
+        else
+        {
+            var existing = State.Medications.FirstOrDefault(m => m.Id == Id);
+            if (existing is null) return;
+            // Work on a clone so Cancel discards edits.
+            _med = new Medication
+            {
+                Id = existing.Id,
+                Name = existing.Name,
+                DoseAmount = existing.DoseAmount,
+                DoseUnit = existing.DoseUnit,
+                Form = existing.Form,
+                Notes = existing.Notes,
+                IsPRN = existing.IsPRN,
+                AlarmTimes = new List<string>(existing.AlarmTimes)
+            };
+        }
+        _formValue = _med.Form?.ToString() ?? "";
+    }
+
+    private void OnPrnToggled()
+    {
+        if (_med!.IsPRN) _med.AlarmTimes.Clear();
+    }
+
+    private void AddTime() => _med!.AlarmTimes.Add("08:00");
+    private void RemoveTime(int i) => _med!.AlarmTimes.RemoveAt(i);
+
+    // Browsers may return "HH:MM:SS" from <input type="time"> — trim to HH:MM.
+    private static string NormalizeTime(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return "";
+        return v.Length >= 5 ? v[..5] : v;
+    }
+
+    private async Task Save()
+    {
+        if (_med is null) return;
+        _med.Form = string.IsNullOrEmpty(_formValue) ? null : Enum.Parse<Form>(_formValue);
+        _med.Name = (_med.Name ?? "").Trim();
+        _med.DoseAmount = string.IsNullOrWhiteSpace(_med.DoseAmount) ? null : _med.DoseAmount.Trim();
+        _med.DoseUnit = string.IsNullOrWhiteSpace(_med.DoseUnit) ? null : _med.DoseUnit.Trim();
+        _med.Notes = string.IsNullOrWhiteSpace(_med.Notes) ? null : _med.Notes.Trim();
+
+        var error = Medication.Validate(_med.Name, _med.IsPRN, _med.AlarmTimes);
+        if (error is not null) { _error = error; return; }
+
+        var idx = State.Medications.FindIndex(m => m.Id == _med.Id);
+        if (idx >= 0) State.Medications[idx] = _med;
+        else State.Medications.Add(_med);
+
+        // Create today's pending events for any newly-added alarm times.
+        if (!_med.IsPRN)
+        {
+            var todayStr = DateTime.Now.ToString("yyyy-MM-dd");
+            var nowHm = DateTime.Now.ToString("HH:mm");
+            foreach (var t in _med.AlarmTimes)
+            {
+                bool exists = State.DoseEvents.Any(e =>
+                    e.MedicationId == _med.Id && e.Date == todayStr && e.ScheduledTime == t);
+                if (!exists && string.Compare(t, nowHm, StringComparison.Ordinal) >= 0)
+                {
+                    State.DoseEvents.Add(new DoseEvent
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        MedicationId = _med.Id,
+                        Date = todayStr,
+                        ScheduledTime = t,
+                        Status = DoseStatus.Pending
+                    });
+                }
+            }
+        }
+
+        await State.SaveAsync();
+        State.NotifyChanged();
+        Nav.NavigateTo("medications");
+    }
+
+    private void Cancel() => Nav.NavigateTo("medications");
+
+    private void ConfirmDelete() => _showDeleteConfirm = true;
+
+    private async Task Delete()
+    {
+        if (_med is null) return;
+        State.Medications.RemoveAll(m => m.Id == _med.Id);
+        State.DoseEvents.RemoveAll(e => e.MedicationId == _med.Id);
+        await State.SaveAsync();
+        State.NotifyChanged();
+        Nav.NavigateTo("medications");
+    }
+}
